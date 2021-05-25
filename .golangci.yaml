@@ -1,0 +1,17 @@
+linters:
+  enable:
+    - varcheck
+    - staticcheck
+    - unconvert
+    - goimports
+    - ineffassign
+    - vet
+    - unused
+    - misspell
+  disable:
+    - errcheck
+
+run:
+  timeout: 3m
+  skip-dirs:
+    - stacks
