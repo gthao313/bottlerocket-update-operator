@@ -18,7 +18,7 @@ FROM $LICENSES_IMAGE as licenses
 # LICENSES_IMAGE.
 WORKDIR /licenses/
 
-FROM $GOLANG_IMAGE as build
+FROM --platform=$BUILDPLATFORM $GOLANG_IMAGE as build
 USER root
 ENV GOPROXY=direct
 WORKDIR /src
@@ -31,10 +31,10 @@ COPY ./ /src/
 RUN make -e build GOBIN=/ CGO_ENABLED=0
 
 # This stage provides certificates (to be copied) from Amazon Linux 2.
-FROM amazonlinux:2 as al2
+FROM --platform=$BUILDPLATFORM amazonlinux:2 as al2
 
 # Build minimal container with a static build of the update operator executable.
-FROM scratch as update-operator
+FROM --platform=$BUILDPLATFORM scratch as update-operator
 COPY --from=al2 /etc/ssl /etc/ssl
 COPY --from=al2 /etc/pki /etc/pki
 COPY --from=build /src/COPYRIGHT /src/LICENSE-* /usr/share/licenses/bottlerocket-update-operator/
