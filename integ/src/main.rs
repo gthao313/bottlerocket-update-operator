@@ -20,6 +20,9 @@ const DEFAULT_KUBECONFIG_FILE_NAME: &str = "kubeconfig.yaml";
 const DEFAULT_REGION: &str = "us-west-2";
 const CLUSTER_NAME: &str = "brupop-integration-test";
 
+//The default values for AMI ID
+const AMI_ARCH: &str = "x86_64";
+
 /// This value configure how long it sleeps between create instance and label instance.
 const INTEGRATION_TEST_DELAY: Duration = Duration::from_secs(60);
 
@@ -60,9 +63,12 @@ enum SubCommand {
 
 // Stores user-supplied arguments for the 'integration-test' subcommand.
 #[derive(StructOpt, Debug)]
-struct IntegrationTestArgs {
-    #[structopt(long = "--instance-ami-id")]
-    instance_ami_id: String,
+pub struct IntegrationTestArgs {
+    #[structopt(long = "--bottlerocket-version")]
+    bottlerocket_version: String,
+
+    #[structopt(long = "--arch", default_value = AMI_ARCH)]
+    ami_arch: String,
 }
 
 async fn generate_kubeconfig(arguments: &Arguments) -> Result<String> {
@@ -122,10 +128,13 @@ async fn run() -> Result<()> {
         SubCommand::IntegrationTest(integ_test_args) => {
             // create instances and add nodes to eks cluster
             info!("Creating EC2 instances ...");
-            let created_instances =
-                create_ec2_instance(cluster_info, &integ_test_args.instance_ami_id)
-                    .await
-                    .context(error::CreateEc2Instances)?;
+            let created_instances = create_ec2_instance(
+                cluster_info,
+                &integ_test_args.ami_arch,
+                &integ_test_args.bottlerocket_version,
+            )
+            .await
+            .context(error::CreateEc2Instances)?;
             info!("EC2 instances have been created");
 
             // generate kubeconfig if no input value for argument `kube_config_path`
