@@ -24,7 +24,6 @@ pub struct ClusterInfo {
     pub nodegroup_sg: Vec<String>,
     pub controlplane_sg: Vec<String>,
     pub clustershared_sg: Vec<String>,
-    pub iam_instance_profile_arn: String,
 }
 
 pub fn write_kubeconfig(
@@ -59,7 +58,6 @@ pub async fn get_cluster_info(cluster_name: &str, region: &str) -> ProviderResul
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let eks_client = aws_sdk_eks::Client::new(&shared_config);
     let ec2_client = aws_sdk_ec2::Client::new(&shared_config);
-    let iam_client = aws_sdk_iam::Client::new(&shared_config);
 
     let eks_version = eks_version(&eks_client, cluster_name).await?;
     let eks_subnet_ids = eks_subnet_ids(&eks_client, cluster_name).await?;
@@ -108,10 +106,6 @@ pub async fn get_cluster_info(cluster_name: &str, region: &str) -> ProviderResul
             .filter_map(|security_group| security_group.group_id)
             .collect();
 
-    let node_instance_role = cluster_iam_identity_mapping(cluster_name, region)?;
-    let iam_instance_profile_arn =
-        instance_profile(&iam_client, cluster_name, &node_instance_role).await?;
-
     Ok(ClusterInfo {
         name: cluster_name.to_string(),
         region: region.to_string(),
@@ -123,7 +117,6 @@ pub async fn get_cluster_info(cluster_name: &str, region: &str) -> ProviderResul
         nodegroup_sg,
         controlplane_sg,
         clustershared_sg,
-        iam_instance_profile_arn,
     })
 }
 
@@ -298,79 +291,4 @@ async fn security_group(
     describe_results
         .security_groups
         .context("Results missing security_groups field")
-}
-
-async fn instance_profile(
-    iam_client: &aws_sdk_iam::Client,
-    cluster_name: &str,
-    node_instance_role: &str,
-) -> ProviderResult<String> {
-    let list_result = iam_client
-        .list_instance_profiles()
-        .send()
-        .await
-        .context("Unable to list instance profiles")?;
-    let eksctl_prefix = format!("eksctl-{}", cluster_name);
-    list_result
-        .instance_profiles
-        .as_ref()
-        .context("No instance profiles found")?
-        .iter()
-        .filter(|x| {
-            x.instance_profile_name
-                .as_ref()
-                .unwrap_or(&"".to_string())
-                .contains("NodeInstanceProfile")
-        })
-        .filter(|x| {
-            x.instance_profile_name
-                .as_ref()
-                .unwrap_or(&"".to_string())
-                .contains(&eksctl_prefix)
-        })
-        .find(|instance_profile| {
-            instance_profile
-                .roles
-                .as_ref()
-                .map(|roles| {
-                    roles
-                        .iter()
-                        .any(|role| role.arn == Some(node_instance_role.to_string()))
-                })
-                .unwrap_or_default()
-        })
-        .context("Node instance profile not found")?
-        .arn
-        .as_ref()
-        .context("Node instance profile missing arn field")
-        .map(|profile| profile.clone())
-}
-
-fn cluster_iam_identity_mapping(cluster_name: &str, region: &str) -> ProviderResult<String> {
-    let iam_identity_output = Command::new("eksctl")
-        .args([
-            "get",
-            "iamidentitymapping",
-            "--cluster",
-            cluster_name,
-            "--region",
-            region,
-            "--output",
-            "json",
-        ])
-        .output()
-        .context("Unable to get iam identity mapping.")?;
-
-    let iam_identity: serde_json::Value =
-        serde_json::from_str(&String::from_utf8_lossy(&iam_identity_output.stdout))
-            .context("Unable to deserialize iam identity mapping")?;
-
-    iam_identity
-        .get(0)
-        .context("No profiles found.")?
-        .get("rolearn")
-        .context("Profile does not contain rolearn.")?
-        .as_str()
-        .context("Rolearn is not a string.")
-        .map(|arn| arn.to_string())
 }

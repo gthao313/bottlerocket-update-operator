@@ -4,12 +4,11 @@ use std::env::temp_dir;
 use std::fs;
 use std::process;
 use structopt::StructOpt;
-use tokio::time::{sleep, Duration};
 
-use integ::ec2_provider::{create_ec2_instance, terminate_ec2_instance};
 use integ::eks_provider::{get_cluster_info, write_kubeconfig};
 use integ::error::ProviderError;
-use integ::updater::{delete_cluster_resources, label_node, run_brupop};
+use integ::nodegroup_provider::{create_nodegroup, terminate_nodegroup};
+use integ::updater::{delete_brupop_cluster_resources, run_brupop};
 
 type Result<T> = std::result::Result<T, error::Error>;
 
@@ -22,9 +21,6 @@ const CLUSTER_NAME: &str = "brupop-integration-test";
 
 //The default values for AMI ID
 const AMI_ARCH: &str = "x86_64";
-
-/// This value configure how long it sleeps between create instance and label instance.
-const INTEGRATION_TEST_DELAY: Duration = Duration::from_secs(60);
 
 #[tokio::main]
 async fn main() {
@@ -126,36 +122,22 @@ async fn run() -> Result<()> {
 
     match &args.subcommand {
         SubCommand::IntegrationTest(integ_test_args) => {
-            // create instances and add nodes to eks cluster
-            info!("Creating EC2 instances ...");
-            let created_instances = create_ec2_instance(
-                cluster_info,
-                &integ_test_args.ami_arch,
-                &integ_test_args.bottlerocket_version,
-            )
-            .await
-            .context(error::CreateEc2Instances)?;
-            info!("EC2 instances have been created");
-
             // generate kubeconfig if no input value for argument `kube_config_path`
             let kube_config_path: String = match args.kube_config_path.as_str() {
                 DEFAULT_KUBECONFIG_FILE_NAME => generate_kubeconfig(&args).await?,
                 res => res.to_string(),
             };
 
-            info!("Sleeping 60 secs to wait Nodes be ready ...");
-            sleep(INTEGRATION_TEST_DELAY).await;
-
-            // label created nodes. To start Bottlerocket updater operator agent on your nodes,
-            // you need to add the bottlerocket.aws/updater-interface-version label
-            info!(
-                "labeling ec2 instances (nodes) ...
-            "
-            );
-            label_node(created_instances.private_dns_name, &kube_config_path)
-                .await
-                .context(error::LabelNode)?;
-            info!("EC2 instances (nodes) have been labelled");
+            // create instances via nodegroup and add nodes to eks cluster
+            info!("Creating EC2 instances via nodegroup ...");
+            create_nodegroup(
+                cluster_info,
+                &integ_test_args.ami_arch,
+                &integ_test_args.bottlerocket_version,
+            )
+            .await
+            .context(error::CreateNodeGroup)?;
+            info!("EC2 instances/nodegroup have been created");
 
             // install brupop on EKS cluster
             info!("Running brupop on existing EKS cluster ...");
@@ -170,15 +152,15 @@ async fn run() -> Result<()> {
                 res => res.to_string(),
             };
 
-            // terminate all instances which created by integration test.
-            info!("Terminating EC2 instance ...");
-            terminate_ec2_instance(cluster_info)
+            // terminate nodegroup which created by integration test.
+            info!("Terminating nodegroup ...");
+            terminate_nodegroup(cluster_info)
                 .await
-                .context(error::TerminateEc2Instance)?;
+                .context(error::TerminateNodeGroup)?;
 
-            // clean up all resources like namespace, deployment on brupop test
-            info!("Deleting all cluster resources which created by integration test ...");
-            delete_cluster_resources(&kube_config_path)
+            // clean up all brupop resources like namespace, deployment on brupop test
+            info!("Deleting all brupop cluster resources which created by integration test ...");
+            delete_brupop_cluster_resources(&kube_config_path)
                 .await
                 .context(error::DeleteClusterResources)?;
 
@@ -207,17 +189,14 @@ mod error {
         #[snafu(display("Unable to create directory for storing kubeconfig file: {}", source))]
         CreateDir { source: std::io::Error },
 
-        #[snafu(display("Failed to create ec2 instances: {}", source))]
-        CreateEc2Instances { source: ProviderError },
-
-        #[snafu(display("Failed to label ec2 instances: {}", source))]
-        LabelNode { source: update_error::Error },
+        #[snafu(display("Failed to create node group: {}", source))]
+        CreateNodeGroup { source: ProviderError },
 
         #[snafu(display("Failed to install brupop on eks cluster: {}", source))]
         RunBrupop { source: update_error::Error },
 
-        #[snafu(display("Failed to terminate ec2 instances: {}", source))]
-        TerminateEc2Instance { source: ProviderError },
+        #[snafu(display("Failed to terminate node group: {}", source))]
+        TerminateNodeGroup { source: ProviderError },
 
         #[snafu(display("Failed to delete created eks cluster resources: {}", source))]
         DeleteClusterResources { source: update_error::Error },
